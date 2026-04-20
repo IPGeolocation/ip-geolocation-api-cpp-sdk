@@ -49,28 +49,7 @@ set_target_properties(ipgeolocation_release_obj PROPERTIES
     VISIBILITY_INLINES_HIDDEN YES
 )
 
-set(IPGEOLOCATION_COMBINED_OBJECT
-    ${CMAKE_CURRENT_BINARY_DIR}/ipgeolocation_combined.o)
-
-add_custom_command(
-    OUTPUT ${IPGEOLOCATION_COMBINED_OBJECT}
-    COMMAND ${CMAKE_COMMAND} -E rm -f ${IPGEOLOCATION_COMBINED_OBJECT}
-    COMMAND ${CMAKE_CXX_COMPILER} -nostdlib -r
-            $<TARGET_OBJECTS:ipgeolocation_release_obj>
-            -o ${IPGEOLOCATION_COMBINED_OBJECT}
-    DEPENDS ipgeolocation_release_obj
-    COMMAND_EXPAND_LISTS
-    VERBATIM
-    COMMENT "Combining the IPGeolocation C++ SDK objects into a single release archive object"
-)
-
-set_source_files_properties(${IPGEOLOCATION_COMBINED_OBJECT}
-    PROPERTIES
-        GENERATED TRUE
-        EXTERNAL_OBJECT TRUE
-)
-
-add_library(ipgeolocation STATIC ${IPGEOLOCATION_COMBINED_OBJECT})
+add_library(ipgeolocation STATIC $<TARGET_OBJECTS:ipgeolocation_release_obj>)
 target_compile_features(ipgeolocation PUBLIC cxx_std_17)
 add_library(ipgeolocation::ipgeolocation ALIAS ipgeolocation)
 target_include_directories(ipgeolocation
@@ -84,6 +63,8 @@ target_link_libraries(ipgeolocation PUBLIC CURL::libcurl)
 set_target_properties(ipgeolocation PROPERTIES
     EXPORT_NAME ipgeolocation
     LINKER_LANGUAGE CXX
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
 )
 
 configure_package_config_file(
