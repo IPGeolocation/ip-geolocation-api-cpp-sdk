@@ -130,12 +130,12 @@ bool IsAsciiWhitespace(char value) {
 
 double ParseLocaleIndependentDouble(std::string_view input) {
 #if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
-    double value = 0.0;
+    double from_chars_value = 0.0;
     const char* begin = input.data();
     const char* end = begin + input.size();
-    const auto result = std::from_chars(begin, end, value);
+    const auto result = std::from_chars(begin, end, from_chars_value);
     if (result.ec == std::errc() && result.ptr == end) {
-        return value;
+        return from_chars_value;
     }
 #endif
 
@@ -149,7 +149,7 @@ double ParseLocaleIndependentDouble(std::string_view input) {
 
     char* parse_end = nullptr;
     errno = 0;
-    const double value = _strtod_l(owned.c_str(), &parse_end, c_locale);
+    const double parsed_value = _strtod_l(owned.c_str(), &parse_end, c_locale);
     _free_locale(c_locale);
 #else
     locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
@@ -159,7 +159,7 @@ double ParseLocaleIndependentDouble(std::string_view input) {
 
     char* parse_end = nullptr;
     errno = 0;
-    const double value = strtod_l(owned.c_str(), &parse_end, c_locale);
+    const double parsed_value = strtod_l(owned.c_str(), &parse_end, c_locale);
     freelocale(c_locale);
 #endif
 
@@ -167,7 +167,7 @@ double ParseLocaleIndependentDouble(std::string_view input) {
         throw SerializationError("Failed to parse JSON: invalid number");
     }
 
-    return value;
+    return parsed_value;
 }
 
 class JsonParser {
