@@ -479,44 +479,32 @@ Response fields are `std::optional` so omitted fields stay omitted. Check `has_v
 
 <details>
 <summary>Can I use this SDK without an API key?</summary>
-
 Only for single lookup with paid-plan request-origin auth. Bulk lookup always requires an API key.
-
 </details>
 
 <details>
 <summary>Can I request XML and still get typed models?</summary>
-
 No. Typed methods only support JSON. Use `LookupIpGeolocationRaw` or `BulkLookupIpGeolocationRaw` for XML.
-
 </details>
 
 <details>
 <summary>Does domain lookup work on the free plan?</summary>
-
 No. Domain lookup is a paid-plan feature.
-
 </details>
 
 <details>
 <summary>Why are so many response fields <code>std::optional</code>?</summary>
-
 Optional fields let the SDK preserve omitted API fields instead of inventing empty values for data the API did not send.
-
 </details>
 
 <details>
 <summary>Can I use the SDK without an IP address?</summary>
-
 Yes. Leave `ip` unset on single lookup to resolve the caller IP.
-
 </details>
 
 <details>
 <summary>What does <code>Close()</code> do?</summary>
-
 It marks the client closed and releases the internal transport state. Closed clients cannot be reused.
-
 </details>
 
 ## Links
