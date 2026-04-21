@@ -1,4 +1,6 @@
 /build/
+/test_package/build/
+/test_package/CMakeUserPresets.json
 /.idea/
 /.vscode/
 /.DS_Store
