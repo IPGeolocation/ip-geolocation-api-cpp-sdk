@@ -34,7 +34,7 @@ The SDK requires `libcurl` with HTTP(S) support. The provided CMake build locate
 
 ### Install with `vcpkg`
 
-Add the IPGeolocation registry from <https://github.com/IPGeolocation/vcpkg-registry> to your `vcpkg-configuration.json`, then install:
+Install the package from the public `vcpkg` registry:
 
 ```bash
 vcpkg install ipgeolocation-cpp-sdk
@@ -46,6 +46,8 @@ Then link it from your CMake project:
 find_package(ipgeolocation CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE ipgeolocation::ipgeolocation)
 ```
+
+If your local `vcpkg` checkout predates the merged port, update `vcpkg` first. The IPGeolocation custom registry at <https://github.com/IPGeolocation/vcpkg-registry> can be used as a fallback while your local baseline catches up.
 
 ### Use with `add_subdirectory`
 
