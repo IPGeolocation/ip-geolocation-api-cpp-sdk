@@ -1,6 +1,6 @@
 # IPGeolocation C++ SDK
 
-Official C++ SDK for the IPGeolocation.io IP Location API.
+Official C++ SDK for the IPGeolocation.io IP Geolocation API.
 
 Look up IPv4, IPv6, and domains with `/v3/ipgeo` and `/v3/ipgeo-bulk`. Get geolocation, company, ASN, timezone, network, hostname, abuse, user-agent, currency, and security data from one API.
 
@@ -510,6 +510,6 @@ It marks the client closed and releases the internal transport state. Closed cli
 ## Links
 
 - Homepage: <https://ipgeolocation.io>
-- IP Location API product page: <https://ipgeolocation.io/ip-location-api.html>
+- IP Geolocation API product page: <https://ipgeolocation.io/ip-location-api.html>
 - Documentation: <https://ipgeolocation.io/documentation/ip-location-api.html>
 - GitHub repository: <https://github.com/IPGeolocation/ip-geolocation-api-cpp-sdk>
