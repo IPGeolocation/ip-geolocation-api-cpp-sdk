@@ -1,4 +1,4 @@
-# IPGeolocation C++ SDK
+# IPGeolocation.io C++ SDK
 
 Official C++ SDK for the IPGeolocation.io IP Geolocation API.
 
@@ -47,7 +47,7 @@ find_package(ipgeolocation CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE ipgeolocation::ipgeolocation)
 ```
 
-If your local `vcpkg` checkout predates the merged port, update `vcpkg` first. The IPGeolocation custom registry at <https://github.com/IPGeolocation/vcpkg-registry> can be used as a fallback while your local baseline catches up.
+If your local `vcpkg` checkout predates the merged port, update `vcpkg` first. The IPGeolocation.io custom registry at <https://github.com/IPGeolocation/vcpkg-registry> can be used as a fallback while your local baseline catches up.
 
 ### Use with `add_subdirectory`
 
@@ -149,7 +149,7 @@ Leave `request.ip` unset to resolve the caller IP.
 
 ## Get Your API Key
 
-Create an IPGeolocation account and copy an API key from your dashboard.
+Create an IPGeolocation.io account and copy an API key from your dashboard.
 
 1. Sign up: <https://app.ipgeolocation.io/signup>
 2. Verify your email if prompted
