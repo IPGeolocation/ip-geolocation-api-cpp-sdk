@@ -56,6 +56,9 @@ struct NormalizedBulkLookupRequest {
     ResponseFormat output = ResponseFormat::kJson;
 };
 
+long CurlTimeoutMilliseconds(std::chrono::milliseconds timeout);
+bool NeedsHttp11ForCurl(unsigned int version);
+
 struct HttpRequestData {
     std::string url;
     std::string method;
@@ -146,8 +149,10 @@ ApiResponseMetadata ToMetadata(
     const std::map<std::string, std::vector<std::string>>& headers);
 
 IpGeolocationResponse ParseIpGeolocationResponse(const std::string& body);
-std::vector<BulkLookupResult> ParseBulkLookupResults(const std::string& body);
-ApiError ToApiError(int status_code, const std::string& body);
+std::vector<BulkLookupResult> ParseBulkLookupResults(const std::string& body, std::size_t max_items,
+                                                     const std::optional<std::string>& api_key = std::nullopt);
+ApiError ToApiError(int status_code, const std::string& body,
+                    const std::optional<std::string>& api_key = std::nullopt);
 std::string ExtractApiMessage(const std::string& body);
 std::string BuildBulkRequestBody(const std::vector<std::string>& ips);
 std::string EscapeJsonString(const std::string& value);

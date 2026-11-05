@@ -120,8 +120,6 @@ bool IsAsciiWhitespace(char value) {
         case '\n':
         case '\r':
         case '\t':
-        case '\f':
-        case '\v':
             return true;
         default:
             return false;
@@ -172,7 +170,8 @@ double ParseLocaleIndependentDouble(std::string_view input) {
 
 class JsonParser {
 public:
-    explicit JsonParser(const std::string& input) : input_(input) {}
+    JsonParser(const std::string& input, std::size_t max_root_items)
+        : input_(input), max_root_items_(max_root_items) {}
 
     JsonValue Parse() {
         SkipWhitespace();
@@ -274,6 +273,9 @@ private:
 
         while (true) {
             SkipWhitespace();
+            if (depth == 0 && array.size() >= max_root_items_) {
+                Fail("bulk response contains more results than requested");
+            }
             array.push_back(ParseValue(depth + 1));
             SkipWhitespace();
             if (Consume(']')) {
@@ -293,6 +295,30 @@ private:
             const char current = input_[index_++];
             if (current == '"') {
                 return result;
+            }
+            const auto byte = static_cast<unsigned char>(current);
+            if (byte < 0x20) {
+                Fail("unescaped control character in string");
+            }
+            if (byte >= 0x80) {
+                const std::size_t start = index_ - 1;
+                if (byte < 0xc2 || byte > 0xf4) {
+                    Fail("invalid UTF-8 in string");
+                }
+                const unsigned length = byte < 0xe0 ? 2 : (byte < 0xf0 ? 3 : 4);
+                for (unsigned i = 1; i < length; ++i) {
+                    if (AtEnd()) {
+                        Fail("invalid UTF-8 in string");
+                    }
+                    const auto next = static_cast<unsigned char>(input_[index_++]);
+                    if ((next & 0xc0) != 0x80 ||
+                        (i == 1 && ((byte == 0xe0 && next < 0xa0) || (byte == 0xed && next >= 0xa0) ||
+                                    (byte == 0xf0 && next < 0x90) || (byte == 0xf4 && next >= 0x90)))) {
+                        Fail("invalid UTF-8 in string");
+                    }
+                }
+                result.append(input_, start, length);
+                continue;
             }
             if (current != '\\') {
                 result.push_back(current);
@@ -511,13 +537,14 @@ private:
     }
 
     const std::string& input_;
+    const std::size_t max_root_items_;
     std::size_t index_ = 0;
 };
 
 }  // namespace
 
-JsonValue ParseJson(const std::string& input) {
-    JsonParser parser(input);
+JsonValue ParseJson(const std::string& input, std::size_t max_root_items) {
+    JsonParser parser(input, max_root_items);
     return parser.Parse();
 }
 

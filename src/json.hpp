@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -52,6 +54,7 @@ private:
     Array array_value_;
 };
 
-JsonValue ParseJson(const std::string& input);
+JsonValue ParseJson(const std::string& input,
+                    std::size_t max_root_items = (std::numeric_limits<std::size_t>::max)());
 
 }  // namespace ipgeolocation::internal

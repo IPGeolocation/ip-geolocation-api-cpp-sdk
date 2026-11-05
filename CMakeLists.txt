@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(ipgeolocation_cpp_sdk VERSION 1.0.0 LANGUAGES CXX)
+project(ipgeolocation_cpp_sdk VERSION 1.0.1 LANGUAGES CXX)
 
 option(IPGEOLOCATION_BUILD_TESTS "Build the C++ SDK unit tests" ON)
 option(IPGEOLOCATION_ENABLE_COVERAGE "Enable LLVM source-based coverage instrumentation" OFF)
@@ -129,6 +129,9 @@ if (IPGEOLOCATION_BUILD_TESTS)
     target_compile_features(ipgeolocation_tests PRIVATE cxx_std_17)
     target_include_directories(ipgeolocation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(ipgeolocation_tests PRIVATE ipgeolocation_test_support)
+    if (WIN32)
+        target_link_libraries(ipgeolocation_tests PRIVATE ws2_32)
+    endif ()
     add_test(NAME ipgeolocation_tests COMMAND ipgeolocation_tests)
 
     add_executable(ipgeolocation_live_integration_tests
@@ -154,6 +157,12 @@ if (IPGEOLOCATION_BUILD_TESTS)
         LABELS "live"
         SKIP_RETURN_CODE 77
     )
+
+    if (MSVC)
+        foreach(test_target ipgeolocation_tests ipgeolocation_live_integration_tests ipgeolocation_live_field_parity_tests)
+            target_compile_options(${test_target} PRIVATE /utf-8)
+        endforeach()
+    endif ()
 
     if (IPGEOLOCATION_ENABLE_COVERAGE)
         if (APPLE)

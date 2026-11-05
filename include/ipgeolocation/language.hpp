@@ -15,6 +15,7 @@ enum class Language {
     kKo,
     kFa,
     kPt,
+    kAr,
 };
 
 }  // namespace ipgeolocation
