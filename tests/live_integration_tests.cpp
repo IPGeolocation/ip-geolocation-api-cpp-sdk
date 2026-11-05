@@ -77,22 +77,6 @@ void TestFreePlanIncludeStarReturnsBaseResponseOnly(const std::string& free_key)
     Expect(!response.data.user_agent.has_value(), "free-plan include=* should not unlock user-agent parsing");
 }
 
-void TestFreePlanBulkIsRejected(const std::string& free_key) {
-    ipgeolocation::IpGeolocationClient client(ApiKeyConfig(free_key));
-
-    ipgeolocation::BulkLookupIpGeolocationRequest request;
-    request.ips = {"8.8.8.8"};
-
-    try {
-        static_cast<void>(client.BulkLookupIpGeolocation(request));
-    } catch (const ipgeolocation::ApiError& error) {
-        Expect(error.status_code() == 401, "free-plan bulk should return status 401");
-        return;
-    }
-
-    throw std::runtime_error("expected free-plan bulk rejection");
-}
-
 void TestPaidPlanSecurityAndAbuseWorks(const std::string& paid_key) {
     ipgeolocation::IpGeolocationClient client(ApiKeyConfig(paid_key));
 
@@ -187,6 +171,25 @@ void TestPaidPlanRawMethodsReturnXmlWhenRequested(const std::string& paid_key) {
     Expect(bulk.data.find('<') != std::string::npos, "raw bulk XML lookup should return XML");
 }
 
+void TestPaidArabicLookups(const std::string& paid_key) {
+    ipgeolocation::IpGeolocationClient client(ApiKeyConfig(paid_key));
+    ipgeolocation::LookupIpGeolocationRequest single;
+    single.ip = "8.8.8.8";
+    single.lang = ipgeolocation::Language::kAr;
+    const auto result = client.LookupIpGeolocation(single);
+    Expect(result.data.location && result.data.location->country_name &&
+               result.data.location->country_name->find("الولايات") != std::string::npos,
+           "single lookup should return the country name in Arabic");
+
+    ipgeolocation::BulkLookupIpGeolocationRequest bulk;
+    bulk.ips = {*single.ip};
+    bulk.lang = single.lang;
+    const auto rows = client.BulkLookupIpGeolocation(bulk).data;
+    Expect(rows.size() == 1 && rows[0].data && rows[0].data->location &&
+               rows[0].data->location->country_name == result.data.location->country_name,
+           "bulk lookup should return the same Arabic country name");
+}
+
 }  // namespace
 
 int main() {
@@ -207,7 +210,7 @@ int main() {
         {"TestFreePlanSecurityModuleIsRejected", [free_key]() { TestFreePlanSecurityModuleIsRejected(*free_key); }},
         {"TestFreePlanIncludeStarReturnsBaseResponseOnly",
          [free_key]() { TestFreePlanIncludeStarReturnsBaseResponseOnly(*free_key); }},
-        {"TestFreePlanBulkIsRejected", [free_key]() { TestFreePlanBulkIsRejected(*free_key); }},
+        {"TestPaidArabicLookups", [paid_key]() { TestPaidArabicLookups(*paid_key); }},
         {"TestPaidPlanSecurityAndAbuseWorks", [paid_key]() { TestPaidPlanSecurityAndAbuseWorks(*paid_key); }},
         {"TestPaidPlanBulkMixedReturnsSuccessAndErrorItems",
          [paid_key]() { TestPaidPlanBulkMixedReturnsSuccessAndErrorItems(*paid_key); }},

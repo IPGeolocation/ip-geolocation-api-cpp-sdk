@@ -41,7 +41,7 @@ ApiResponse<IpGeolocationResponse> IpGeolocationClient::LookupIpGeolocation(
     const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(finished_at - started_at).count();
 
     if (response.status_code / 100 != 2) {
-        throw internal::ToApiError(response.status_code, response.body);
+        throw internal::ToApiError(response.status_code, response.body, impl_->config.api_key);
     }
 
     ApiResponse<IpGeolocationResponse> result;
@@ -72,7 +72,7 @@ ApiResponse<std::string> IpGeolocationClient::LookupIpGeolocationRaw(
     const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(finished_at - started_at).count();
 
     if (response.status_code / 100 != 2) {
-        throw internal::ToApiError(response.status_code, response.body);
+        throw internal::ToApiError(response.status_code, response.body, impl_->config.api_key);
     }
 
     ApiResponse<std::string> result;
@@ -107,11 +107,11 @@ ApiResponse<std::vector<BulkLookupResult>> IpGeolocationClient::BulkLookupIpGeol
     const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(finished_at - started_at).count();
 
     if (response.status_code / 100 != 2) {
-        throw internal::ToApiError(response.status_code, response.body);
+        throw internal::ToApiError(response.status_code, response.body, impl_->config.api_key);
     }
 
     ApiResponse<std::vector<BulkLookupResult>> result;
-    result.data = internal::ParseBulkLookupResults(response.body);
+    result.data = internal::ParseBulkLookupResults(response.body, normalized.ips.size(), impl_->config.api_key);
     result.metadata = internal::ToMetadata(response.status_code, duration_ms, response.headers);
     return result;
 }
@@ -138,7 +138,7 @@ ApiResponse<std::string> IpGeolocationClient::BulkLookupIpGeolocationRaw(
     const auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(finished_at - started_at).count();
 
     if (response.status_code / 100 != 2) {
-        throw internal::ToApiError(response.status_code, response.body);
+        throw internal::ToApiError(response.status_code, response.body, impl_->config.api_key);
     }
 
     ApiResponse<std::string> result;

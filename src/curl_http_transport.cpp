@@ -1,5 +1,8 @@
 #include "internal.hpp"
 
+#include <algorithm>
+#include <climits>
+#include <cstdlib>
 #include <mutex>
 #include <memory>
 #include <string>
@@ -31,16 +34,20 @@ struct WriteContext {
 
 std::size_t WriteBody(char* pointer, std::size_t size, std::size_t nmemb, void* userdata) {
     auto* context = static_cast<WriteContext*>(userdata);
-    const std::size_t bytes = size * nmemb;
-    if (context->body.size() + bytes > context->max_size) {
+    if (size != 0 && nmemb > (context->max_size - context->body.size()) / size) {
         context->size_exceeded = true;
         return 0;
     }
-    context->body.append(pointer, bytes);
-    return bytes;
+    const std::size_t bytes = size * nmemb;
+    try {
+        context->body.append(pointer, bytes);
+        return bytes;
+    } catch (...) {
+        return 0;
+    }
 }
 
-std::size_t ReadHeaders(char* buffer, std::size_t size, std::size_t nitems, void* userdata) {
+std::size_t ReadHeaders(char* buffer, std::size_t size, std::size_t nitems, void* userdata) try {
     auto* headers = static_cast<std::map<std::string, std::vector<std::string>>*>(userdata);
     const std::size_t bytes = size * nitems;
     std::string line(buffer, bytes);
@@ -60,9 +67,7 @@ std::size_t ReadHeaders(char* buffer, std::size_t size, std::size_t nitems, void
     while (!name.empty() && (name.back() == '\r' || name.back() == '\n' || name.back() == ' ' || name.back() == '\t')) {
         name.pop_back();
     }
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-        value.erase(value.begin());
-    }
+    value.erase(0, value.find_first_not_of(" \t"));
     while (!value.empty() && (value.back() == '\r' || value.back() == '\n')) {
         value.pop_back();
     }
@@ -72,6 +77,8 @@ std::size_t ReadHeaders(char* buffer, std::size_t size, std::size_t nitems, void
     }
 
     return bytes;
+} catch (...) {
+    return 0;
 }
 
 class CurlHeaderList {
@@ -88,7 +95,11 @@ public:
     CurlHeaderList& operator=(const CurlHeaderList&) = delete;
 
     void Append(const std::string& header_line) {
-        list_ = curl_slist_append(list_, header_line.c_str());
+        curl_slist* appended = curl_slist_append(list_, header_line.c_str());
+        if (appended == nullptr) {
+            throw TransportError("failed to prepare request headers");
+        }
+        list_ = appended;
     }
 
     curl_slist* get() const noexcept {
@@ -99,10 +110,28 @@ private:
     curl_slist* list_ = nullptr;
 };
 
+void CheckCurl(CURLcode result) {
+    if (result != CURLE_OK) {
+        throw TransportError(std::string("libcurl transport error: ") + curl_easy_strerror(result));
+    }
+}
+
 }  // namespace
+
+long CurlTimeoutMilliseconds(std::chrono::milliseconds timeout) {
+    return static_cast<long>(std::min<std::chrono::milliseconds::rep>(timeout.count(), LONG_MAX));
+}
+
+bool NeedsHttp11ForCurl(unsigned int version) {
+    return version >= 0x080c00 && version < 0x081700 &&
+           !(version >= 0x080e03 && version < 0x080f00) &&
+           !(version >= 0x081002 && version < 0x081100) &&
+           !(version >= 0x081402 && version < 0x081500);
+}
 
 CurlHttpTransport::CurlHttpTransport() {
     EnsureCurlGlobalState();
+    idle_handles_.reserve(kMaxIdleHandles);
 }
 
 CurlHttpTransport::~CurlHttpTransport() {
@@ -161,29 +190,37 @@ HttpResponseData CurlHttpTransport::Send(const HttpRequestData& request, std::si
         header_list.Append(name + ": " + value);
     }
 
-    curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str());
-    curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(request.connect_timeout.count()));
-    curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, static_cast<long>(request.read_timeout.count()));
-    curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
-    curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header_list.get());
-    curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, &WriteBody);
-    curl_easy_setopt(handle, CURLOPT_WRITEDATA, &write_context);
-    curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, &ReadHeaders);
-    curl_easy_setopt(handle, CURLOPT_HEADERDATA, &headers);
+    if (NeedsHttp11ForCurl(curl_version_info(CURLVERSION_NOW)->version_num)) {
+        CheckCurl(curl_easy_setopt(handle, CURLOPT_HTTP_VERSION, static_cast<long>(CURL_HTTP_VERSION_1_1)));
+    }
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str()));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, CurlTimeoutMilliseconds(request.connect_timeout)));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, CurlTimeoutMilliseconds(request.read_timeout)));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_HTTPHEADER, header_list.get()));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, &WriteBody));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_WRITEDATA, &write_context));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_HEADERFUNCTION, &ReadHeaders));
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_HEADERDATA, &headers));
 
     if (request.method == "POST") {
-        curl_easy_setopt(handle, CURLOPT_POST, 1L);
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, request.body.c_str());
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, static_cast<long>(request.body.size()));
+        CheckCurl(curl_easy_setopt(handle, CURLOPT_POST, 1L));
+        CheckCurl(curl_easy_setopt(handle, CURLOPT_POSTFIELDS, request.body.c_str()));
+        CheckCurl(curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size())));
     } else {
-        curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L);
+        CheckCurl(curl_easy_setopt(handle, CURLOPT_HTTPGET, 1L));
     }
 
     const CURLcode result = curl_easy_perform(handle);
+    long status_code = 0;
+    CheckCurl(curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status_code));
     if (result != CURLE_OK) {
+        if (status_code >= 300 && status_code < 600) {
+            return {static_cast<int>(status_code), {}, std::move(headers)};
+        }
         if (result == CURLE_OPERATION_TIMEDOUT) {
             throw RequestTimeoutError(
                 "HTTP request timed out after " + std::to_string(request.read_timeout.count()) +
@@ -195,9 +232,6 @@ HttpResponseData CurlHttpTransport::Send(const HttpRequestData& request, std::si
 
         throw TransportError(std::string("libcurl transport error: ") + curl_easy_strerror(result));
     }
-
-    long status_code = 0;
-    curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status_code);
 
     HttpResponseData response;
     response.status_code = static_cast<int>(status_code);

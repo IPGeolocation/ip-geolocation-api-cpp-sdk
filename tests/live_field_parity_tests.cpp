@@ -95,6 +95,8 @@ JsonValue ToJsonValue(const ipgeolocation::Network& value) {
     AddOptionalField(object, "connection_type", value.connection_type);
     AddOptionalField(object, "route", value.route);
     AddOptionalField(object, "is_anycast", value.is_anycast);
+    AddOptionalField(object, "is_cdn", value.is_cdn);
+    AddOptionalField(object, "cdn_provider_name", value.cdn_provider_name);
     return JsonValue::ObjectValue(std::move(object));
 }
 
@@ -171,6 +173,17 @@ JsonValue ToJsonValue(const ipgeolocation::Security& value) {
     AddOptionalField(object, "is_spam", value.is_spam);
     AddOptionalField(object, "is_cloud_provider", value.is_cloud_provider);
     AddOptionalField(object, "cloud_provider_name", value.cloud_provider_name);
+    AddOptionalField(object, "is_known_good_bot", value.is_known_good_bot);
+    AddOptionalField(object, "is_corporate_gateway", value.is_corporate_gateway);
+    AddOptionalField(object, "proxy_days_seen_30d", value.proxy_days_seen_30d);
+    AddOptionalField(object, "proxy_days_seen_7d", value.proxy_days_seen_7d);
+    AddOptionalField(object, "proxy_provider_count_30d", value.proxy_provider_count_30d);
+    AddOptionalField(object, "bot_confidence_score", value.bot_confidence_score);
+    AddOptionalField(object, "bot_operator_name", value.bot_operator_name);
+    AddOptionalField(object, "bot_type", value.bot_type);
+    AddOptionalField(object, "bot_last_seen", value.bot_last_seen);
+    AddOptionalField(object, "corporate_gateway_type", value.corporate_gateway_type);
+    AddOptionalField(object, "corporate_gateway_provider_name", value.corporate_gateway_provider_name);
     return JsonValue::ObjectValue(std::move(object));
 }
 

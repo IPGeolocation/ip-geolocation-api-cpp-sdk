@@ -4,6 +4,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <string_view>
 
 #include "json.hpp"
 #include "ipgeolocation/version.hpp"
@@ -58,6 +59,17 @@ std::string Trim(const std::string& value) {
 
 bool ContainsCrOrLf(const std::string& value) {
     return value.find('\r') != std::string::npos || value.find('\n') != std::string::npos;
+}
+
+void ValidateHeaderValue(const std::string& value, const char* field_name) {
+    if (ContainsCrOrLf(value)) {
+        throw ValidationError(std::string(field_name) + " must not contain CR or LF");
+    }
+    if (std::any_of(value.begin(), value.end(), [](unsigned char c) {
+            return (c < 0x20 && c != '\t') || c == 0x7f;
+        })) {
+        throw ValidationError(std::string(field_name) + " must not contain control characters");
+    }
 }
 
 bool ContainsAsciiWhitespace(const std::string& value) {
@@ -249,13 +261,12 @@ std::string NormalizeOptionalNonBlankString(
         return "";
     }
 
+    if (reject_crlf) {
+        ValidateHeaderValue(*value, field_name);
+    }
     const std::string normalized = Trim(*value);
     if (normalized.empty()) {
         throw ValidationError(std::string(field_name) + " must not be blank");
-    }
-
-    if (reject_crlf && ContainsCrOrLf(normalized)) {
-        throw ValidationError(std::string(field_name) + " must not contain CR or LF");
     }
 
     return normalized;
@@ -423,6 +434,8 @@ std::optional<std::string> NormalizeLanguage(const std::optional<Language>& raw_
 std::map<std::string, std::string> NormalizeHeaders(const std::map<std::string, std::string>& headers) {
     std::map<std::string, std::string> normalized;
     for (const auto& [raw_name, raw_value] : headers) {
+        ValidateHeaderValue(raw_name, "headers");
+        ValidateHeaderValue(raw_value, "headers");
         const std::string name = Trim(raw_name);
         const std::string value = Trim(raw_value);
         if (name.empty()) {
@@ -431,8 +444,10 @@ std::map<std::string, std::string> NormalizeHeaders(const std::map<std::string, 
         if (value.empty()) {
             throw ValidationError("headers must not contain blank values");
         }
-        if (ContainsCrOrLf(name) || ContainsCrOrLf(value)) {
-            throw ValidationError("headers must not contain CR or LF");
+        if (!std::all_of(name.begin(), name.end(), [](unsigned char byte) {
+                return IsAsciiAlphaNumeric(byte) || std::string_view("!#$%&'*+-.^_`|~").find(byte) != std::string_view::npos;
+            })) {
+            throw ValidationError("invalid HTTP header name");
         }
         normalized[name] = value;
     }
@@ -482,6 +497,100 @@ std::string UrlEncode(const std::string& value) {
     }
 
     return encoded;
+}
+
+constexpr char kRedacted[] = "[REDACTED]";
+
+std::string MaskMatches(std::string value, const std::string& secret) {
+    auto pos = value.find(secret);
+    if (pos == std::string::npos) {
+        return value;
+    }
+    const auto limit = std::max<std::size_t>(value.size(), 4096);
+    std::string safe;
+    std::size_t from = 0;
+    do {
+        safe.append(value, from, pos - from);
+        safe += kRedacted;
+        if (safe.size() > limit) {
+            return kRedacted;
+        }
+        from = pos + secret.size();
+        pos = value.find(secret, from);
+    } while (pos != std::string::npos);
+    if (value.size() - from > limit - safe.size()) {
+        return kRedacted;
+    }
+    safe.append(value, from);
+    return safe;
+}
+
+int HexValue(unsigned char byte) {
+    if (IsAsciiDigit(byte)) {
+        return byte - '0';
+    }
+    const auto lower = ToLowerAscii(byte);
+    return lower >= 'a' && lower <= 'f' ? lower - 'a' + 10 : -1;
+}
+
+std::string RedactErrorText(std::string value, const std::optional<std::string>& key) {
+    if (!key || key->empty()) {
+        return value;
+    }
+    if (value.find('%') != std::string::npos) {
+        const auto encoded = UrlEncode(*key);
+        if (encoded != *key) {
+            value = MaskMatches(std::move(value), encoded);
+        }
+        std::string decoded;
+        for (std::size_t i = 0; i < value.size(); ++i) {
+            if (value[i] == '%' && value.size() - i >= 3) {
+                const int hi = HexValue(value[i + 1]), lo = HexValue(value[i + 2]);
+                if (hi >= 0 && lo >= 0) {
+                    decoded.push_back(static_cast<char>((hi << 4) | lo));
+                    i += 2;
+                    continue;
+                }
+            }
+            decoded.push_back(value[i]);
+        }
+        if (decoded != value && decoded.find(*key) != std::string::npos) {
+            return kRedacted;
+        }
+    }
+    return MaskMatches(std::move(value), *key);
+}
+
+std::string SafeErrorBody(const std::string& body, const std::optional<std::string>& key) {
+    if (key && !key->empty() && body.find('\\') != std::string::npos) {
+        for (std::size_t start = body.find('"'); start != std::string::npos;) {
+            auto end = start + 1;
+            bool escaped = false;
+            for (; end < body.size() && body[end] != '"'; ++end) {
+                if (body[end] == '\\') {
+                    escaped = true;
+                    if (++end == body.size()) {
+                        return kRedacted;
+                    }
+                }
+            }
+            if (end == body.size()) {
+                return kRedacted;
+            }
+            if (escaped) {
+                try {
+                    const auto token = ParseJson(body.substr(start, end - start + 1));
+                    if (RedactErrorText(token.string_value(), key) != token.string_value()) {
+                        return kRedacted;
+                    }
+                } catch (const SerializationError&) {
+                    return kRedacted;
+                }
+            }
+            start = body.find('"', end + 1);
+        }
+    }
+    return RedactErrorText(body, key);
 }
 
 std::string JoinCsv(const std::vector<std::string>& values) {
@@ -671,6 +780,8 @@ Network ParseNetwork(const JsonValue::Object& object) {
     value.connection_type = ReadString(GetMember(object, {"connection_type"}));
     value.route = ReadString(GetMember(object, {"route"}));
     value.is_anycast = ReadBool(GetMember(object, {"is_anycast"}));
+    value.is_cdn = ReadBool(GetMember(object, {"is_cdn"}));
+    value.cdn_provider_name = ReadString(GetMember(object, {"cdn_provider_name"}));
     return value;
 }
 
@@ -747,6 +858,17 @@ Security ParseSecurity(const JsonValue::Object& object) {
     value.is_spam = ReadBool(GetMember(object, {"is_spam"}));
     value.is_cloud_provider = ReadBool(GetMember(object, {"is_cloud_provider"}));
     value.cloud_provider_name = ReadString(GetMember(object, {"cloud_provider_name"}));
+    value.is_known_good_bot = ReadBool(GetMember(object, {"is_known_good_bot"}));
+    value.is_corporate_gateway = ReadBool(GetMember(object, {"is_corporate_gateway"}));
+    value.proxy_days_seen_30d = ReadNumber(GetMember(object, {"proxy_days_seen_30d"}));
+    value.proxy_days_seen_7d = ReadNumber(GetMember(object, {"proxy_days_seen_7d"}));
+    value.proxy_provider_count_30d = ReadNumber(GetMember(object, {"proxy_provider_count_30d"}));
+    value.bot_confidence_score = ReadNumber(GetMember(object, {"bot_confidence_score"}));
+    value.bot_operator_name = ReadString(GetMember(object, {"bot_operator_name"}));
+    value.bot_type = ReadString(GetMember(object, {"bot_type"}));
+    value.bot_last_seen = ReadString(GetMember(object, {"bot_last_seen"}));
+    value.corporate_gateway_type = ReadString(GetMember(object, {"corporate_gateway_type"}));
+    value.corporate_gateway_provider_name = ReadString(GetMember(object, {"corporate_gateway_provider_name"}));
     return value;
 }
 
@@ -945,6 +1067,8 @@ std::string LanguageCode(Language language) {
             return "fa";
         case Language::kPt:
             return "pt";
+        case Language::kAr:
+            return "ar";
     }
 
     return "en";
@@ -1045,8 +1169,9 @@ IpGeolocationResponse ParseIpGeolocationResponse(const std::string& body) {
     return ParseResponseObject(root.object_value());
 }
 
-std::vector<BulkLookupResult> ParseBulkLookupResults(const std::string& body) {
-    const JsonValue root = ParseJson(body);
+std::vector<BulkLookupResult> ParseBulkLookupResults(const std::string& body, std::size_t max_items,
+                                                     const std::optional<std::string>& api_key) {
+    const JsonValue root = ParseJson(body, max_items);
     if (!root.is_array()) {
         throw SerializationError("Failed to deserialize bulk response: expected an array payload");
     }
@@ -1066,7 +1191,7 @@ std::vector<BulkLookupResult> ParseBulkLookupResults(const std::string& body) {
             has_error_key || (error_message.has_value() && !looks_like_success)) {
             BulkLookupResult result;
             result.error = BulkLookupError{
-                error_message.value_or("bulk item returned an error without a parsable message")};
+                RedactErrorText(error_message.value_or("bulk item returned an error without a parsable message"), api_key)};
             results.push_back(std::move(result));
             continue;
         }
@@ -1084,19 +1209,20 @@ std::vector<BulkLookupResult> ParseBulkLookupResults(const std::string& body) {
     return results;
 }
 
-ApiError ToApiError(int status_code, const std::string& body) {
-    std::string message = ExtractApiMessage(body);
+ApiError ToApiError(int status_code, const std::string& body, const std::optional<std::string>& api_key) {
+    std::string safe_body = SafeErrorBody(body, api_key);
+    std::string message = ExtractApiMessage(safe_body);
     if (message.empty()) {
         message = GenericApiErrorMessage(status_code);
     }
 
-    return ApiError(status_code, message, body);
+    return ApiError(status_code, RedactErrorText(std::move(message), api_key), std::move(safe_body));
 }
 
 std::string ExtractApiMessage(const std::string& body) {
     const std::string trimmed = Trim(body);
-    if (trimmed.empty()) {
-        return "";
+    if (trimmed.empty() || (trimmed.front() != '{' && trimmed.front() != '"')) {
+        return trimmed;
     }
 
     try {

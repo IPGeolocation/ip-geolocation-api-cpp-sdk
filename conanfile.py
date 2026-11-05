@@ -14,7 +14,7 @@ required_conan_version = ">=2.0.9"
 
 class IpGeolocationCppSdkConan(ConanFile):
     name = "ipgeolocation-cpp-sdk"
-    version = "1.0.0"
+    version = "1.0.1"
     license = "MIT"
     url = "https://github.com/IPGeolocation/ip-geolocation-api-cpp-sdk"
     homepage = "https://github.com/IPGeolocation/ip-geolocation-api-cpp-sdk"

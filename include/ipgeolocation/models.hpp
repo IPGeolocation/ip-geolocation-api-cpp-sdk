@@ -49,6 +49,8 @@ struct IPGEOLOCATION_API Network {
     std::optional<std::string> connection_type;
     std::optional<std::string> route;
     std::optional<bool> is_anycast;
+    std::optional<bool> is_cdn;
+    std::optional<std::string> cdn_provider_name;
 };
 
 struct IPGEOLOCATION_API Asn {
@@ -115,6 +117,17 @@ struct IPGEOLOCATION_API Security {
     std::optional<bool> is_spam;
     std::optional<bool> is_cloud_provider;
     std::optional<std::string> cloud_provider_name;
+    std::optional<bool> is_known_good_bot;
+    std::optional<bool> is_corporate_gateway;
+    std::optional<double> proxy_days_seen_30d;
+    std::optional<double> proxy_days_seen_7d;
+    std::optional<double> proxy_provider_count_30d;
+    std::optional<double> bot_confidence_score;
+    std::optional<std::string> bot_operator_name;
+    std::optional<std::string> bot_type;
+    std::optional<std::string> bot_last_seen;
+    std::optional<std::string> corporate_gateway_type;
+    std::optional<std::string> corporate_gateway_provider_name;
 };
 
 struct IPGEOLOCATION_API Abuse {

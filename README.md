@@ -30,7 +30,7 @@ Look up IPv4, IPv6, and domains with `/v3/ipgeo` and `/v3/ipgeo-bulk`. Get geolo
 
 Use the SDK from CMake in one of these ways.
 
-The SDK requires `libcurl` with HTTP(S) support. The provided CMake build locates it with `find_package(CURL REQUIRED)`.
+The SDK requires `libcurl` with HTTP(S) support. Use libcurl 8.23.0 or newer, or a version patched by your operating system. The provided CMake build locates it with `find_package(CURL REQUIRED)`.
 
 ### Install with `vcpkg`
 
@@ -142,7 +142,7 @@ Leave `request.ip` unset to resolve the caller IP.
 | Supported Endpoints | `/v3/ipgeo`, `/v3/ipgeo-bulk` |
 | Supported Inputs | IPv4, IPv6, domain |
 | Main Data Returned | Geolocation, company, ASN, time zone, network, hostname, abuse, user-agent, currency, security |
-| Authentication | API key, request-origin auth for `/v3/ipgeo` only |
+| Authentication | API key |
 | Response Formats | Structured JSON, raw JSON, raw XML |
 | Bulk Limit | Up to 50,000 IPs or domains per request |
 | Transport | `libcurl` |
@@ -157,7 +157,7 @@ Create an IPGeolocation.io account and copy an API key from your dashboard.
 4. Open your dashboard: <https://app.ipgeolocation.io/dashboard>
 5. Copy an API key from the `API Keys` section
 
-For server-side C++ code, keep the API key in an environment variable or secret manager. For browser-based single lookups on paid plans, use request-origin auth instead of exposing an API key in frontend code.
+Keep your IPGeolocation.io API key in an environment variable or secret manager.
 
 ## Authentication
 
@@ -172,22 +172,7 @@ if (const char* api_key = std::getenv("IPGEO_API_KEY"); api_key != nullptr) {
 ipgeolocation::IpGeolocationClient client(config);
 ```
 
-### Request-Origin Auth
-
-```cpp
-ipgeolocation::IpGeolocationClientConfig config;
-config.request_origin = "https://app.example.com";
-
-ipgeolocation::IpGeolocationClient client(config);
-```
-
-`request_origin` must be an absolute `http` or `https` origin with no path, query string, fragment, or userinfo.
-
-> [!IMPORTANT]
-> Request-origin auth does not work with `/v3/ipgeo-bulk`. Bulk lookup always requires `api_key`.
-
-> [!NOTE]
-> If you set both `api_key` and `request_origin`, single lookup still uses the API key. The API key is sent as the `apiKey` query parameter, so avoid logging full request URLs.
+The API key is sent as the `apiKey` query parameter, so avoid logging full request URLs.
 
 ## Plan Behavior
 
@@ -199,7 +184,6 @@ Feature availability depends on your plan and request parameters.
 | Domain lookup | Not supported | Supported |
 | Bulk lookup | Not supported | Supported |
 | Non-English `lang` | Not supported | Supported |
-| Request-origin auth | Not supported | Supported for `/v3/ipgeo` only |
 | Optional modules via `include` | Not supported | Supported |
 | `include = {"*"}` | Base response only | All plan-available modules |
 
@@ -209,12 +193,11 @@ Paid plans still need `include` for optional modules. `fields` and `excludes` on
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `api_key` | `std::optional<std::string>` | unset | Required for bulk lookup. Optional for single lookup if `request_origin` is set. |
-| `request_origin` | `std::optional<std::string>` | unset | Must be an absolute `http` or `https` origin with no path, query string, fragment, or userinfo. |
+| `api_key` | `std::optional<std::string>` | unset | Your IPGeolocation.io API key. |
 | `base_url` | `std::string` | `https://api.ipgeolocation.io` | Override the API base URL. |
 | `connect_timeout` | `std::chrono::milliseconds` | `10000ms` | Time to open the connection. Must be greater than zero and must be less than or equal to `read_timeout`. |
-| `read_timeout` | `std::chrono::milliseconds` | `30000ms` | Time to wait while reading the response body. Must be greater than zero and must be greater than or equal to `connect_timeout`. |
-| `max_response_body_chars` | `std::size_t` | `33554432` | Maximum response body size the SDK will buffer before failing the request. Must be greater than zero. |
+| `read_timeout` | `std::chrono::milliseconds` | `30000ms` | Maximum time for the whole request, including the connection and the response. Must be greater than zero and at least as long as `connect_timeout`. |
+| `max_response_body_chars` | `std::size_t` | `33554432` | Largest response to read, in bytes. Must be greater than zero. |
 
 Config values are validated when the client is created. Request values are validated before each request is sent.
 
@@ -222,7 +205,7 @@ Request methods are safe to call concurrently on a shared client instance. `Clos
 
 Typed JSON parsing rejects payloads nested deeper than `256` levels.
 
-The transport buffers up to `max_response_body_chars` bytes of response body data before failing with `response body exceeded maxResponseBodyChars`.
+If a successful response is too large, the SDK throws `TransportError`. If an API error is too large, you still get its HTTP status.
 
 ## Available Methods
 
@@ -244,7 +227,7 @@ The transport buffers up to `max_response_body_chars` bytes of response body dat
 |-------|------------|-------|
 | `ip` | Single lookup | IPv4, IPv6, or domain. Leave it unset for caller IP lookup. |
 | `ips` | Bulk lookup | Collection of 1 to 50,000 IPs or domains. |
-| `lang` | Single and bulk | One of `Language::kEn`, `kDe`, `kRu`, `kJa`, `kFr`, `kCn`, `kEs`, `kCs`, `kIt`, `kKo`, `kFa`, or `kPt`. |
+| `lang` | Single and bulk | One of `Language::kEn`, `kDe`, `kRu`, `kJa`, `kFr`, `kCn`, `kEs`, `kCs`, `kIt`, `kKo`, `kFa`, `kPt`, or `kAr` (Arabic). |
 | `include` | Single and bulk | Collection of module names such as `security`, `abuse`, `user_agent`, `hostname`, `liveHostname`, `hostnameFallbackLive`, `geo_accuracy`, `dma_code`, or `*`. |
 | `fields` | Single and bulk | Collection of field paths to keep, for example `location.country_name` or `security.threat_score`. |
 | `excludes` | Single and bulk | Collection of field paths to remove from the response. |
@@ -416,14 +399,14 @@ Header names are preserved in the case the server returned them. Response header
 
 The SDK throws exceptions derived from `IpGeolocationError`:
 
-- `ValidationError`: invalid config, invalid request, blank headers, bad origin, or missing auth
+- `ValidationError`: invalid settings, invalid request, invalid headers, or missing credentials
 - `ClientClosedError`: method called after `Close()`
 - `TransportError`: `libcurl` transport failure
 - `RequestTimeoutError`: connection or read timeout
 - `SerializationError`: invalid JSON in typed methods
 - `ApiError`: non-2xx API response, including HTTP status code and response body
 
-`ApiError` exposes `status_code()` and `response_body()`. Its `what()` message is taken from the API's JSON error body when present. If the body is not parseable JSON, the message falls back to the raw body or a status-based string.
+`ApiError` gives you the HTTP status, the error message and the response body. If an error includes your API key, the SDK hides it. This also applies to errors in individual bulk results. If the error body is too large or the connection ends before it arrives in full, you still get the HTTP status.
 
 Example:
 
@@ -447,13 +430,9 @@ try {
 
 ## Troubleshooting
 
-### `bulk lookup requires apiKey in client config`
+### Missing API key
 
-Bulk lookup does not support request-origin auth. Set `api_key` in the client config.
-
-### `requestOrigin must not include a path`
-
-Use an origin only, such as `https://app.example.com`. Do not include `/path`, query strings, fragments, or userinfo.
+Set `api_key` before making a lookup.
 
 ### `headers must not contain CR or LF`
 
@@ -476,11 +455,6 @@ Increase `max_response_body_chars` in the client config if you expect unusually 
 Response fields are `std::optional` so omitted fields stay omitted. Check `has_value()` before dereferencing, or rely on `value_or(...)` when a default is safe.
 
 ## Frequently Asked Questions
-
-<details>
-<summary>Can I use this SDK without an API key?</summary>
-Only for single lookup with paid-plan request-origin auth. Bulk lookup always requires an API key.
-</details>
 
 <details>
 <summary>Can I request XML and still get typed models?</summary>

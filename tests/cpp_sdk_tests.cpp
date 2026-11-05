@@ -1,4 +1,17 @@
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <csignal>
+#endif
+#include <climits>
 #include <chrono>
 #include <cerrno>
 #include <clocale>
@@ -9,12 +22,9 @@
 #include <iostream>
 #include <mutex>
 #include <memory>
-#include <netinet/in.h>
 #include <stdexcept>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 #include "ipgeolocation/ipgeolocation.hpp"
@@ -154,10 +164,24 @@ private:
     std::shared_ptr<ConcurrentTransportState> state_;
 };
 
-void WriteAll(int fd, const std::string& data) {
+#if defined(_WIN32)
+using TestSocket = SOCKET;
+using SocketLength = int;
+constexpr TestSocket kInvalidSocket = INVALID_SOCKET;
+constexpr int kShutdownBoth = SD_BOTH;
+void CloseSocket(TestSocket fd) { closesocket(fd); }
+#else
+using TestSocket = int;
+using SocketLength = socklen_t;
+constexpr TestSocket kInvalidSocket = -1;
+constexpr int kShutdownBoth = SHUT_RDWR;
+void CloseSocket(TestSocket fd) { close(fd); }
+#endif
+
+void WriteAll(TestSocket fd, const std::string& data) {
     std::size_t total = 0;
     while (total < data.size()) {
-        const auto sent = send(fd, data.data() + total, data.size() - total, 0);
+        const auto sent = send(fd, data.data() + total, static_cast<int>(std::min<std::size_t>(data.size() - total, INT_MAX)), 0);
         if (sent <= 0) {
             throw std::runtime_error("failed to write loopback response");
         }
@@ -165,7 +189,7 @@ void WriteAll(int fd, const std::string& data) {
     }
 }
 
-std::string ReadHttpRequest(int fd) {
+std::string ReadHttpRequest(TestSocket fd) {
     std::string request;
     std::size_t expected_body_size = 0;
     bool saw_headers = false;
@@ -201,14 +225,14 @@ std::string ReadHttpRequest(int fd) {
 
 class LoopbackServer {
 public:
-    explicit LoopbackServer(std::function<void(int)> handler) : handler_(std::move(handler)) {
+    explicit LoopbackServer(std::function<void(TestSocket)> handler) : handler_(std::move(handler)) {
         listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-        if (listen_fd_ < 0) {
+        if (listen_fd_ == kInvalidSocket) {
             throw std::runtime_error("failed to create loopback socket");
         }
 
         int reuse = 1;
-        static_cast<void>(setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)));
+        static_cast<void>(setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse)));
 
         sockaddr_in address{};
 #ifdef __APPLE__
@@ -219,28 +243,28 @@ public:
         address.sin_port = 0;
 
         if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
-            close(listen_fd_);
+            CloseSocket(listen_fd_);
             throw std::runtime_error(std::string("failed to bind loopback socket: ") + std::strerror(errno));
         }
 
-        socklen_t address_length = sizeof(address);
+        SocketLength address_length = sizeof(address);
         if (getsockname(listen_fd_, reinterpret_cast<sockaddr*>(&address), &address_length) != 0) {
-            close(listen_fd_);
+            CloseSocket(listen_fd_);
             throw std::runtime_error("failed to inspect loopback socket");
         }
 
         port_ = ntohs(address.sin_port);
 
         if (listen(listen_fd_, 1) != 0) {
-            close(listen_fd_);
+            CloseSocket(listen_fd_);
             throw std::runtime_error("failed to listen on loopback socket");
         }
 
         thread_ = std::thread([this]() {
             sockaddr_in client_address{};
-            socklen_t client_length = sizeof(client_address);
-            const int client_fd = accept(listen_fd_, reinterpret_cast<sockaddr*>(&client_address), &client_length);
-            if (client_fd < 0) {
+            SocketLength client_length = sizeof(client_address);
+            const TestSocket client_fd = accept(listen_fd_, reinterpret_cast<sockaddr*>(&client_address), &client_length);
+            if (client_fd == kInvalidSocket) {
                 return;
             }
 
@@ -249,17 +273,16 @@ public:
             } catch (...) {
             }
 
-            shutdown(client_fd, SHUT_RDWR);
-            close(client_fd);
+            shutdown(client_fd, kShutdownBoth);
+            CloseSocket(client_fd);
         });
     }
 
     ~LoopbackServer() {
+        shutdown(listen_fd_, kShutdownBoth);
+        CloseSocket(listen_fd_);
         if (thread_.joinable()) {
             thread_.join();
-        }
-        if (listen_fd_ >= 0) {
-            close(listen_fd_);
         }
     }
 
@@ -268,10 +291,10 @@ public:
     }
 
 private:
-    int listen_fd_ = -1;
+    TestSocket listen_fd_ = kInvalidSocket;
     int port_ = 0;
     std::thread thread_;
-    std::function<void(int)> handler_;
+    std::function<void(TestSocket)> handler_;
 };
 
 void Expect(bool condition, const std::string& message) {
@@ -1050,13 +1073,13 @@ void TestParseIpGeolocationResponseRejectsNonObjectPayload() {
 void TestParseBulkLookupRejectsInvalidShapes() {
     ExpectThrows<ipgeolocation::SerializationError>(
         []() {
-            static_cast<void>(ipgeolocation::internal::ParseBulkLookupResults("{}"));
+            static_cast<void>(ipgeolocation::internal::ParseBulkLookupResults("{}", 50000));
         },
         "Failed to deserialize bulk response: expected an array payload");
 
     ExpectThrows<ipgeolocation::SerializationError>(
         []() {
-            static_cast<void>(ipgeolocation::internal::ParseBulkLookupResults(R"([1])"));
+            static_cast<void>(ipgeolocation::internal::ParseBulkLookupResults(R"([1])", 50000));
         },
         "Failed to deserialize bulk response: expected object items");
 }
@@ -1160,7 +1183,7 @@ void TestParseBulkLookupParsesDirectMessageErrors() {
         R"([
             {"message":"Plain bulk failure"},
             {"ip":"8.8.8.8"}
-        ])");
+        ])", 50000);
 
     Expect(response.size() == 2, "bulk parser should return both items");
     Expect(response[0].error.has_value() && response[0].error->message.has_value() &&
@@ -1177,7 +1200,7 @@ void TestParseBulkLookupUsesFallbackMessageForMalformedErrorItems() {
             {"error":{}},
             {"error":null},
             {"error":{"code":123}}
-        ])");
+        ])", 50000);
 
     Expect(response.size() == 3, "bulk parser should keep malformed error items");
     for (const auto& result : response) {
@@ -1197,7 +1220,7 @@ void TestParseBulkLookupPrefersSuccessMarkersOverTopLevelMessage() {
                 "message":"not-an-error",
                 "location":{"country_name":"United States"}
             }
-        ])");
+        ])", 50000);
 
     Expect(response.size() == 1, "bulk parser should keep success items with informational message fields");
     Expect(response[0].data.has_value(), "success markers should win over a top-level message field");
@@ -1210,7 +1233,7 @@ void TestParseBulkLookupRejectsWrappedSuccessItems() {
     ExpectThrows<ipgeolocation::SerializationError>(
         []() {
             static_cast<void>(ipgeolocation::internal::ParseBulkLookupResults(
-                R"([{"data":{"ip":"8.8.8.8"}}])"));
+                R"([{"data":{"ip":"8.8.8.8"}}])", 50000));
         },
         "Failed to deserialize bulk response: unexpected wrapped success item");
 }
@@ -2098,7 +2121,7 @@ void TestJsonParserRejectsMoreInvalidForms() {
 }
 
 void TestCurlTransportCapturesHeadersAndTrimsHeaderNameWhitespace() {
-    LoopbackServer server([](int client_fd) {
+    LoopbackServer server([](TestSocket client_fd) {
         WriteAll(
             client_fd,
             "HTTP/1.1 200 OK\r\n"
@@ -2130,7 +2153,7 @@ void TestCurlTransportCapturesHeadersAndTrimsHeaderNameWhitespace() {
 
 void TestCurlTransportTimeoutAndSizeLimitErrors() {
     {
-        LoopbackServer timeout_server([](int client_fd) {
+        LoopbackServer timeout_server([](TestSocket client_fd) {
             std::this_thread::sleep_for(std::chrono::milliseconds(120));
             WriteAll(client_fd, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
         });
@@ -2150,7 +2173,7 @@ void TestCurlTransportTimeoutAndSizeLimitErrors() {
     }
 
     {
-        LoopbackServer oversized_server([](int client_fd) {
+        LoopbackServer oversized_server([](TestSocket client_fd) {
             WriteAll(client_fd, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhello");
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             WriteAll(client_fd, "world");
@@ -2171,7 +2194,7 @@ void TestCurlTransportTimeoutAndSizeLimitErrors() {
     }
 
     {
-        LoopbackServer first_chunk_oversized_server([](int client_fd) {
+        LoopbackServer first_chunk_oversized_server([](TestSocket client_fd) {
             const std::string body(65536, 'x');
             WriteAll(
                 client_fd,
@@ -2195,7 +2218,7 @@ void TestCurlTransportTimeoutAndSizeLimitErrors() {
 
 void TestCurlTransportReusesConnectionAcrossSequentialRequests() {
     auto captured_requests = std::make_shared<std::vector<std::string>>();
-    LoopbackServer server([captured_requests](int client_fd) {
+    LoopbackServer server([captured_requests](TestSocket client_fd) {
         captured_requests->push_back(ReadHttpRequest(client_fd));
         WriteAll(
             client_fd,
@@ -2309,7 +2332,7 @@ void TestCurlTransportSurfacesGenericLibcurlErrors() {
 
 void TestCurlTransportPostPathAndOutgoingHeaders() {
     auto captured_request = std::make_shared<std::string>();
-    LoopbackServer server([captured_request](int client_fd) {
+    LoopbackServer server([captured_request](TestSocket client_fd) {
         *captured_request = ReadHttpRequest(client_fd);
         WriteAll(
             client_fd,
@@ -2379,8 +2402,243 @@ void TestBuildRequestsCoverHeaderReplacementAndBulkOrigin() {
            "bulk request builder should include the configured origin header");
 }
 
+void TestArabicRequestsAndBulkResults() {
+    using namespace ipgeolocation;
+    const std::string row = R"({"ip":"8.8.8.8","location":{"country_name":"الولايات المتحدة"},"country_metadata":{"languages":["en","ar"]}})";
+    const std::string mixed = "[" + row + R"(,{"error":{"message":"invalid fixture/+"}}])";
+    ScopedMockTransportFactory factory({{200, row, {}}, {200, mixed, {}}, {200, mixed, {}}});
+    IpGeolocationClientConfig config;
+    config.api_key = "fixture/+";
+    auto client = factory.CreateClient(config);
+    LookupIpGeolocationRequest single;
+    single.ip = "8.8.8.8";
+    single.lang = Language::kAr;
+    auto one = client.LookupIpGeolocation(single);
+    Expect(one.data.location->country_name == "الولايات المتحدة", "Arabic single response");
+    BulkLookupIpGeolocationRequest bulk;
+    bulk.ips = {"8.8.8.8", "bad.example", "8.8.8.8"};
+    bulk.lang = Language::kAr;
+    const auto rows = client.BulkLookupIpGeolocation(bulk).data;
+    Expect(rows.size() == 2 && rows[0].data->location->country_name == one.data.location->country_name,
+           "allow fewer results and preserve Arabic data");
+    Expect(rows[1].error->message == "invalid [REDACTED]", "mask the key in a typed bulk error");
+    Expect(client.BulkLookupIpGeolocationRaw(bulk).data == mixed, "raw bulk returns the original response");
+    for (const auto& request : factory.state()->requests) {
+        Expect(request.url.find("lang=ar") != std::string::npos, "single and bulk must send Arabic");
+        Expect(request.url.find("apiKey=fixture%2F%2B") != std::string::npos, "send the configured key");
+    }
+}
+
+void TestRedactedApiErrors() {
+    using namespace ipgeolocation;
+    IpGeolocationClientConfig config;
+    config.api_key = "fixture/+";
+    const std::string echoed = R"({"error":{"message":"use fixture/+ or fixture%2F%2B"}})";
+    ScopedMockTransportFactory factory(std::vector<internal::HttpResponseData>(4, {401, echoed, {}}));
+    auto client = factory.CreateClient(config);
+    BulkLookupIpGeolocationRequest bulk;
+    bulk.ips = {"8.8.8.8"};
+    const std::vector<std::function<void()>> calls = {
+        [&] { client.LookupIpGeolocation(); }, [&] { client.LookupIpGeolocationRaw(); },
+        [&] { client.BulkLookupIpGeolocation(bulk); }, [&] { client.BulkLookupIpGeolocationRaw(bulk); }
+    };
+    for (const auto& call : calls) {
+        try {
+            call();
+            throw std::runtime_error("expected HTTP error");
+        } catch (const ApiError& error) {
+            Expect(error.status_code() == 401, "keep HTTP error status");
+            Expect(std::string(error.what()) == "use [REDACTED] or [REDACTED]", "redact both key forms");
+            Expect(error.response_body() == R"({"error":{"message":"use [REDACTED] or [REDACTED]"}})",
+                   "redact stored HTTP error body");
+        }
+    }
+    for (const auto& body : {R"({"message":"failed","other":"fixt\u0075re/+"})",
+                             R"({"detail":{"message":"fixture%2f%2B"}})",
+                             R"({"message":"fixture\u00)", "unquoted %66ixture%2f%2b"}) {
+        const auto error = internal::ToApiError(403, body, config.api_key);
+        Expect(error.response_body() == "[REDACTED]", "discard unsafe encoded or incomplete diagnostics");
+    }
+    const std::string benign = R"({"message":"try\nagain","path":"a%20b"})";
+    Expect(internal::ToApiError(503, benign, config.api_key).response_body() == benign,
+           "preserve harmless escaped and percent-encoded text");
+    Expect(internal::ToApiError(401, std::string(10000, 'x'), std::string("x")).response_body() == "[REDACTED]",
+           "many copies of a short key must not expand the diagnostic");
+    const std::string success = R"({"ip":"fixture/+"})";
+    ScopedMockTransportFactory success_factory({{200, success, {}}, {200, success, {}}});
+    auto success_client = success_factory.CreateClient(config);
+    Expect(success_client.LookupIpGeolocation().data.ip == config.api_key, "keep successful typed data intact");
+    Expect(success_client.LookupIpGeolocationRaw().data == success, "keep successful raw data intact");
+}
+
+void TestBulkResponseLimit() {
+    using namespace ipgeolocation;
+    BulkLookupIpGeolocationRequest bulk;
+    bulk.ips = {"8.8.8.8"};
+    const std::string extra = R"([{},{"ignored":)" + std::string(200000, '[');
+    const std::string nested = R"([{"country_metadata":{"languages":["en","ar"]}}])";
+    ScopedMockTransportFactory factory({{200, extra, {}}, {200, extra, {}}, {200, nested, {}}, {200, "[]", {}}});
+    IpGeolocationClientConfig config;
+    config.api_key = "fixture";
+    auto client = factory.CreateClient(config);
+    ExpectThrows<SerializationError>([&] { client.BulkLookupIpGeolocation(bulk); },
+                                     "Failed to parse JSON: bulk response contains more results than requested");
+    Expect(client.BulkLookupIpGeolocationRaw(bulk).data == extra, "raw response remains byte-for-byte");
+    Expect(client.BulkLookupIpGeolocation(bulk).data[0].data->country_metadata->languages->size() == 2,
+           "nested lists have their own lengths");
+    Expect(client.BulkLookupIpGeolocation(bulk).data.empty(), "an empty response stays empty");
+
+    bulk.ips.assign(50000, "8.8.8.8");
+    bulk.ips.back() = "1.1.1.1";
+    std::string response = "[";
+    for (std::size_t i = 0; i < bulk.ips.size(); ++i) {
+        if (i > 0) response += ',';
+        response += "{\"ip\":\"" + bulk.ips[i] + "\"}";
+    }
+    response += ']';
+    ScopedMockTransportFactory full({{200, std::move(response), {}}});
+    const auto rows = full.CreateClient(config).BulkLookupIpGeolocation(bulk).data;
+    Expect(rows.size() == bulk.ips.size(), "accept a full 50,000-result batch");
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        Expect(rows[i].data->ip == bulk.ips[i], "keep all rows in request order, including duplicates");
+    }
+}
+
+void TestOptionalNetworkAndSecurityFields() {
+    using namespace ipgeolocation::internal;
+    const auto data = ParseIpGeolocationResponse(R"({
+        "network":{"is_cdn":false,"cdn_provider_name":"Example CDN"},
+        "security":{"proxy_days_seen_30d":20,"proxy_days_seen_7d":0,"proxy_provider_count_30d":2,
+                    "bot_confidence_score":91.5,"bot_operator_name":"Example Bot","bot_type":"crawler",
+                    "is_known_good_bot":true,"bot_last_seen":"2026-10-01","is_corporate_gateway":false,
+                    "corporate_gateway_type":"secure_web_gateway","corporate_gateway_provider_name":"Gateway"}
+    })");
+    Expect(data.network->is_cdn == false && data.network->cdn_provider_name == "Example CDN", "CDN details");
+    const auto& security = data.security.value();
+    Expect(security.proxy_days_seen_30d == 20 && security.proxy_days_seen_7d == 0 &&
+               security.proxy_provider_count_30d == 2, "proxy details");
+    Expect(security.bot_confidence_score == 91.5 && security.is_known_good_bot == true &&
+               security.bot_operator_name == "Example Bot" && security.bot_type == "crawler" &&
+               security.bot_last_seen == "2026-10-01", "bot details");
+    Expect(security.is_corporate_gateway == false && security.corporate_gateway_type == "secure_web_gateway" &&
+               security.corporate_gateway_provider_name == "Gateway", "corporate gateway details");
+    const auto missing = ParseIpGeolocationResponse(R"({"network":{},"security":{"bot_last_seen":null}})");
+    Expect(!missing.network->is_cdn && !missing.security->proxy_days_seen_7d && !missing.security->bot_last_seen,
+           "fields omitted by the API stay empty");
+}
+
+void TestTypedJsonText() {
+    using namespace ipgeolocation;
+    const std::string unicode = "عربي 🌍" "\xF4\x8F\xBF\xBF";
+    Expect(internal::ParseJson("\"" + unicode + "\"").string_value() == unicode, "valid UTF-8 is preserved");
+    for (const std::string invalid : {"\x80", "\xc0\xaf", "\xc2", "\xe0\x9f\x80", "\xed\xa0\x80",
+                                      "\xe2\x28\xa1", "\xf0\x8f\xbf\xbf", "\xf4\x90\x80\x80", "\xf5"}) {
+        for (const auto& json : {"{\"ip\":\"" + invalid + "\"}", "{\"" + invalid + "\":0}"}) {
+            ExpectThrows<SerializationError>([&] { internal::ParseIpGeolocationResponse(json); },
+                                             "Failed to parse JSON: invalid UTF-8 in string");
+        }
+    }
+    for (int code = 0; code < 0x20; ++code) {
+        const std::string body = "{\"ip\":\"a" + std::string(1, static_cast<char>(code)) + "b\"}";
+        ExpectThrows<SerializationError>([&] { internal::ParseIpGeolocationResponse(body); },
+                                         "Failed to parse JSON: unescaped control character in string");
+    }
+    const std::string raw = "{\"ip\":\"\xff\n\"}";
+    ScopedMockTransportFactory factory({{200, raw, {}}});
+    IpGeolocationClientConfig config;
+    config.api_key = "fixture";
+    Expect(factory.CreateClient(config).LookupIpGeolocationRaw().data == raw, "raw response preserves invalid bytes");
+}
+
+void TestHeaderValidationBeforeSending() {
+    using namespace ipgeolocation;
+    LookupIpGeolocationRequest single;
+    BulkLookupIpGeolocationRequest bulk;
+    bulk.ips = {"8.8.8.8"};
+    const auto rejected = [&](const std::string& message) {
+        ExpectThrows<ValidationError>([&] { internal::NormalizeLookupRequest(single); }, message);
+        ExpectThrows<ValidationError>([&] { internal::NormalizeBulkLookupRequest(bulk); }, message);
+    };
+    for (const std::string name : {"X:Injected", "X Test", "X\tTest", "X/Name"}) {
+        single.headers = bulk.headers = {{name, "value"}};
+        rejected("invalid HTTP header name");
+    }
+    for (const auto ch : {0, 11, 12, 31, 127}) {
+        const auto control = std::string(1, static_cast<char>(ch));
+        single.headers = bulk.headers = {{"X-Test" + control, "value"}};
+        rejected("headers must not contain control characters");
+        single.headers = bulk.headers = {{"X-Test", control + "value"}};
+        rejected("headers must not contain control characters");
+        single.headers = bulk.headers = {};
+        single.user_agent = bulk.user_agent = "Agent" + control;
+        rejected("userAgent must not contain control characters");
+        single.user_agent.reset();
+        bulk.user_agent.reset();
+    }
+    single.user_agent = bulk.user_agent = "\r\nAgent";
+    rejected("userAgent must not contain CR or LF");
+    single.user_agent.reset();
+    single.headers = {{" X-Test_123 ", " \tfirst\tsecond "}};
+    Expect(internal::NormalizeLookupRequest(single).headers.at("X-Test_123") == "first\tsecond",
+           "valid names, surrounding whitespace and a tab in a value still work");
+}
+
+void TestIncompleteHttpResponses() {
+    using namespace ipgeolocation;
+    const auto check_http_error = [](int status, const std::string& body, std::size_t limit) {
+        LoopbackServer server([&](TestSocket fd) {
+            ReadHttpRequest(fd);
+            WriteAll(fd, "HTTP/1.1 " + std::to_string(status) + " Error\r\nContent-Length: 30\r\n\r\n" + body);
+        });
+        IpGeolocationClientConfig config;
+        config.base_url = server.url();
+        config.api_key = "fixture";
+        config.max_response_body_chars = limit;
+        try {
+            IpGeolocationClient(config).LookupIpGeolocationRaw();
+            throw std::runtime_error("expected an HTTP error");
+        } catch (const ApiError& error) {
+            Expect(error.status_code() == status && error.response_body().empty(),
+                   "keep the status and discard the incomplete HTTP error body");
+        }
+    };
+    check_http_error(429, std::string(30, 'a'), 4);
+    check_http_error(503, "fixture", 32);
+    check_http_error(302, "moved", 32);
+    for (const std::string status : {"200 OK", "100 Continue"}) {
+        LoopbackServer server([&](TestSocket fd) {
+            ReadHttpRequest(fd);
+            WriteAll(fd, "HTTP/1.1 " + status + "\r\nContent-Length: 12\r\n\r\nx");
+        });
+        IpGeolocationClientConfig config;
+        config.api_key = "fixture";
+        config.base_url = server.url();
+        try {
+            IpGeolocationClient(config).LookupIpGeolocationRaw();
+            throw std::runtime_error("expected a transport error");
+        } catch (const TransportError&) {
+        }
+    }
+}
+
+void TestCurlTimeoutAndVersionBoundaries() {
+    using namespace ipgeolocation::internal;
+    using std::chrono::milliseconds;
+    Expect(CurlTimeoutMilliseconds(milliseconds(1)) == 1, "small timeout remains positive");
+    Expect(CurlTimeoutMilliseconds(milliseconds(1500)) == 1500, "ordinary timeout is exact");
+    Expect(CurlTimeoutMilliseconds(milliseconds::max()) == LONG_MAX, "largest timeout saturates");
+    Expect(CurlTimeoutMilliseconds(milliseconds(4294967296LL)) == std::min(4294967296LL, static_cast<long long>(LONG_MAX)),
+           "large Windows timeout cannot become zero");
+    for (const auto affected : {0x080c00, 0x080e02, 0x080f00, 0x081001, 0x081100, 0x081401, 0x081500, 0x081600}) {
+        Expect(NeedsHttp11ForCurl(affected), "use HTTP/1.1 with affected libcurl");
+    }
+    for (const auto patched : {0x080b01, 0x080e03, 0x081002, 0x081402, 0x081700, 0x081701}) {
+        Expect(!NeedsHttp11ForCurl(patched), "keep protocol negotiation on unaffected releases");
+    }
+}
+
 void TestDefaultUserAgentIsStable() {
-    Expect(ipgeolocation::IpGeolocationClient::DefaultUserAgent() == "ipgeolocation-cpp-sdk/1.0.0",
+    Expect(ipgeolocation::IpGeolocationClient::DefaultUserAgent() == "ipgeolocation-cpp-sdk/1.0.1",
            "default user agent should match version");
 }
 
@@ -2401,6 +2659,15 @@ void TestClosedClientRejectsRequestsBeforeTransport() {
 }  // namespace
 
 int main() {
+#if defined(_WIN32)
+    WSADATA data{};
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+        return 1;
+    }
+    std::atexit([] { WSACleanup(); });
+#else
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
     const std::vector<std::pair<std::string, std::function<void()>>> tests = {
         {"TestConfigNormalizesRequestOriginAndBaseUrl", TestConfigNormalizesRequestOriginAndBaseUrl},
         {"TestConfigRejectsRequestOriginPath", TestConfigRejectsRequestOriginPath},
@@ -2473,6 +2740,14 @@ int main() {
         {"TestCurlTransportCapsIdleHandlePool", TestCurlTransportCapsIdleHandlePool},
         {"TestCurlTransportSurfacesGenericLibcurlErrors", TestCurlTransportSurfacesGenericLibcurlErrors},
         {"TestCurlTransportPostPathAndOutgoingHeaders", TestCurlTransportPostPathAndOutgoingHeaders},
+        {"TestArabicRequestsAndBulkResults", TestArabicRequestsAndBulkResults},
+        {"TestRedactedApiErrors", TestRedactedApiErrors},
+        {"TestBulkResponseLimit", TestBulkResponseLimit},
+        {"TestOptionalNetworkAndSecurityFields", TestOptionalNetworkAndSecurityFields},
+        {"TestTypedJsonText", TestTypedJsonText},
+        {"TestHeaderValidationBeforeSending", TestHeaderValidationBeforeSending},
+        {"TestIncompleteHttpResponses", TestIncompleteHttpResponses},
+        {"TestCurlTimeoutAndVersionBoundaries", TestCurlTimeoutAndVersionBoundaries},
         {"TestDefaultUserAgentIsStable", TestDefaultUserAgentIsStable},
         {"TestClosedClientRejectsRequestsBeforeTransport", TestClosedClientRejectsRequestsBeforeTransport},
     };
