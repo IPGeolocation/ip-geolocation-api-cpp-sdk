@@ -2462,6 +2462,12 @@ void TestRedactedApiErrors() {
         const auto error = internal::ToApiError(403, body, config.api_key);
         Expect(error.response_body() == "[REDACTED]", "discard unsafe encoded or incomplete diagnostics");
     }
+    for (const std::string broken : {"\"unfinished\\", R"("broken\q")"}) {
+        Expect(internal::ToApiError(502, broken, config.api_key).response_body() == "[REDACTED]",
+               "discard a quoted error that cannot be decoded safely");
+    }
+    Expect(internal::ToApiError(502, "x" + std::string(4095, 'a'), std::string("x")).response_body() == "[REDACTED]",
+           "redaction stays bounded even when a short key is followed by a large suffix");
     const std::string benign = R"({"message":"try\nagain","path":"a%20b"})";
     Expect(internal::ToApiError(503, benign, config.api_key).response_body() == benign,
            "preserve harmless escaped and percent-encoded text");
@@ -2563,6 +2569,12 @@ void TestTypedJsonText() {
         const std::string body = "{\"ip\":\"a" + std::string(1, static_cast<char>(code)) + "b\"}";
         ExpectThrows<SerializationError>([&] { internal::ParseIpGeolocationResponse(body); },
                                          "Failed to parse JSON: unescaped control character in string");
+    }
+    ExpectThrows<SerializationError>([] { internal::ParseJson("\"\xe2\x82"); },
+                                     "Failed to parse JSON: invalid UTF-8 in string");
+    for (const auto* malformed : {R"("\ud800\)", R"("\ud800\x")", R"("\ud800\u0000")"}) {
+        ExpectThrows<SerializationError>([&] { internal::ParseJson(malformed); },
+                                         "Failed to parse JSON: invalid unicode surrogate pair");
     }
     const std::string raw = "{\"ip\":\"\xff\n\"}";
     ScopedMockTransportFactory factory({{200, raw, {}}});
