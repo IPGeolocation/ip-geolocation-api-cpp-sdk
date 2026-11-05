@@ -1,7 +1,11 @@
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ipgeolocation/visibility.hpp"
@@ -203,4 +207,57 @@ struct IPGEOLOCATION_API BulkLookupResult {
     }
 };
 
+namespace internal {
+
+template <typename Model>
+struct BindingMembers;
+
+template <>
+struct BindingMembers<Network> {
+    inline static constexpr auto fields =
+        std::make_tuple(&Network::connection_type, &Network::route, &Network::is_anycast);
+};
+
+template <>
+struct BindingMembers<Security> {
+    inline static constexpr auto fields = std::make_tuple(
+        &Security::threat_score, &Security::is_tor, &Security::is_proxy, &Security::proxy_provider_names,
+        &Security::proxy_confidence_score, &Security::proxy_last_seen, &Security::is_residential_proxy,
+        &Security::is_vpn, &Security::vpn_provider_names, &Security::vpn_confidence_score, &Security::vpn_last_seen,
+        &Security::is_relay, &Security::relay_provider_name, &Security::is_anonymous, &Security::is_known_attacker,
+        &Security::is_bot, &Security::is_spam, &Security::is_cloud_provider, &Security::cloud_provider_name);
+};
+
+}
+
+template <std::size_t I, typename Model,
+          std::enable_if_t<std::is_same_v<std::decay_t<Model>, Network> ||
+                           std::is_same_v<std::decay_t<Model>, Security>, int> = 0>
+constexpr decltype(auto) get(Model&& value) noexcept {
+    constexpr auto field = std::get<I>(internal::BindingMembers<std::decay_t<Model>>::fields);
+    return (std::forward<Model>(value).*field);
+}
+
 }  // namespace ipgeolocation
+
+namespace std {
+
+template <>
+struct tuple_size<ipgeolocation::Network>
+    : tuple_size<decltype(ipgeolocation::internal::BindingMembers<ipgeolocation::Network>::fields)> {};
+
+template <>
+struct tuple_size<ipgeolocation::Security>
+    : tuple_size<decltype(ipgeolocation::internal::BindingMembers<ipgeolocation::Security>::fields)> {};
+
+template <size_t I>
+struct tuple_element<I, ipgeolocation::Network> {
+    using type = remove_reference_t<decltype(ipgeolocation::get<I>(declval<ipgeolocation::Network&>()))>;
+};
+
+template <size_t I>
+struct tuple_element<I, ipgeolocation::Security> {
+    using type = remove_reference_t<decltype(ipgeolocation::get<I>(declval<ipgeolocation::Security&>()))>;
+};
+
+}

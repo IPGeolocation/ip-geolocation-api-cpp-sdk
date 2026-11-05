@@ -190,12 +190,14 @@ HttpResponseData CurlHttpTransport::Send(const HttpRequestData& request, std::si
         header_list.Append(name + ": " + value);
     }
 
-    if (NeedsHttp11ForCurl(curl_version_info(CURLVERSION_NOW)->version_num)) {
+    static const bool use_http11 = NeedsHttp11ForCurl(curl_version_info(CURLVERSION_NOW)->version_num);
+    if (use_http11) {
         CheckCurl(curl_easy_setopt(handle, CURLOPT_HTTP_VERSION, static_cast<long>(CURL_HTTP_VERSION_1_1)));
     }
     CheckCurl(curl_easy_setopt(handle, CURLOPT_URL, request.url.c_str()));
     CheckCurl(curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, CurlTimeoutMilliseconds(request.connect_timeout)));
-    CheckCurl(curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, CurlTimeoutMilliseconds(request.read_timeout)));
+    const long request_timeout = CurlTimeoutMilliseconds(request.read_timeout);
+    CheckCurl(curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, request_timeout));
     CheckCurl(curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L));
     CheckCurl(curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L));
     CheckCurl(curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L));
@@ -223,7 +225,7 @@ HttpResponseData CurlHttpTransport::Send(const HttpRequestData& request, std::si
         }
         if (result == CURLE_OPERATION_TIMEDOUT) {
             throw RequestTimeoutError(
-                "HTTP request timed out after " + std::to_string(request.read_timeout.count()) +
+                "HTTP request timed out after " + std::to_string(request_timeout) +
                 "ms while waiting for response data");
         }
         if (result == CURLE_WRITE_ERROR && write_context.size_exceeded) {

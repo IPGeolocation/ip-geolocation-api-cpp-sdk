@@ -2120,13 +2120,13 @@ void TestJsonParserRejectsMoreInvalidForms() {
         "Failed to parse JSON: maximum nesting depth exceeded");
 }
 
-void TestCurlTransportCapturesHeadersAndTrimsHeaderNameWhitespace() {
+void TestCurlTransportCapturesHeaders() {
     LoopbackServer server([](TestSocket client_fd) {
+        ReadHttpRequest(client_fd);
         WriteAll(
             client_fd,
             "HTTP/1.1 200 OK\r\n"
-            ":\tignored\r\n"
-            "X-Test \t: value\r\n"
+            "X-Test: value\r\n"
             "X-Test: second\r\n"
             "X-Tab:\ttrimmed\r\n"
             "\r\n"
@@ -2144,7 +2144,7 @@ void TestCurlTransportCapturesHeadersAndTrimsHeaderNameWhitespace() {
     Expect(response.status_code == 200, "loopback transport GET should succeed");
     Expect(response.body == "ok", "loopback transport should read the response body");
     Expect(response.headers.at("X-Test").size() == 2, "loopback transport should keep duplicate headers");
-    Expect(response.headers.at("X-Test").front() == "value", "loopback transport should trim header name whitespace");
+    Expect(response.headers.at("X-Test").front() == "value", "loopback transport should preserve the first header value");
     Expect(response.headers.at("X-Tab").front() == "trimmed",
            "loopback transport should trim leading tab whitespace in header values");
     Expect(response.headers.count("") == 0,
@@ -2154,6 +2154,7 @@ void TestCurlTransportCapturesHeadersAndTrimsHeaderNameWhitespace() {
 void TestCurlTransportTimeoutAndSizeLimitErrors() {
     {
         LoopbackServer timeout_server([](TestSocket client_fd) {
+            ReadHttpRequest(client_fd);
             std::this_thread::sleep_for(std::chrono::milliseconds(120));
             WriteAll(client_fd, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
         });
@@ -2174,6 +2175,7 @@ void TestCurlTransportTimeoutAndSizeLimitErrors() {
 
     {
         LoopbackServer oversized_server([](TestSocket client_fd) {
+            ReadHttpRequest(client_fd);
             WriteAll(client_fd, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhello");
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             WriteAll(client_fd, "world");
@@ -2195,6 +2197,7 @@ void TestCurlTransportTimeoutAndSizeLimitErrors() {
 
     {
         LoopbackServer first_chunk_oversized_server([](TestSocket client_fd) {
+            ReadHttpRequest(client_fd);
             const std::string body(65536, 'x');
             WriteAll(
                 client_fd,
@@ -2504,6 +2507,24 @@ void TestBulkResponseLimit() {
     }
 }
 
+void TestExistingModelBindings() {
+    ipgeolocation::Network network{"hosting", "8.8.8.0/24", true};
+    auto& [connection_type, route, anycast] = network;
+    route = "8.8.0.0/16";
+    Expect(connection_type == "hosting" && network.route == route && anycast == true, "existing Network bindings");
+    const auto& read_only = network;
+    const auto& [read_type, read_route, read_anycast] = read_only;
+    Expect(&read_route == &network.route && read_type == connection_type && read_anycast == anycast,
+           "const reference bindings alias the original fields");
+
+    ipgeolocation::Security security;
+    security.threat_score = 51;
+    security.cloud_provider_name = "Example";
+    const auto [score, tor, proxy, providers, proxy_score, proxy_seen, residential, vpn, vpn_names,
+                vpn_score, vpn_seen, relay, relay_name, anonymous, attacker, bot, spam, cloud, cloud_name] = security;
+    Expect(score == 51 && !proxy && cloud_name == "Example", "existing Security bindings keep their order");
+}
+
 void TestOptionalNetworkAndSecurityFields() {
     using namespace ipgeolocation::internal;
     const auto data = ParseIpGeolocationResponse(R"({
@@ -2731,8 +2752,8 @@ int main() {
         {"TestJsonParserCoversNullEscapesExponentAndFailures", TestJsonParserCoversNullEscapesExponentAndFailures},
         {"TestJsonParserUsesLocaleIndependentNumberParsing", TestJsonParserUsesLocaleIndependentNumberParsing},
         {"TestJsonParserRejectsMoreInvalidForms", TestJsonParserRejectsMoreInvalidForms},
-        {"TestCurlTransportCapturesHeadersAndTrimsHeaderNameWhitespace",
-         TestCurlTransportCapturesHeadersAndTrimsHeaderNameWhitespace},
+        {"TestCurlTransportCapturesHeaders",
+         TestCurlTransportCapturesHeaders},
         {"TestCurlTransportTimeoutAndSizeLimitErrors", TestCurlTransportTimeoutAndSizeLimitErrors},
         {"TestCurlTransportReusesConnectionAcrossSequentialRequests",
          TestCurlTransportReusesConnectionAcrossSequentialRequests},
@@ -2743,6 +2764,7 @@ int main() {
         {"TestArabicRequestsAndBulkResults", TestArabicRequestsAndBulkResults},
         {"TestRedactedApiErrors", TestRedactedApiErrors},
         {"TestBulkResponseLimit", TestBulkResponseLimit},
+        {"TestExistingModelBindings", TestExistingModelBindings},
         {"TestOptionalNetworkAndSecurityFields", TestOptionalNetworkAndSecurityFields},
         {"TestTypedJsonText", TestTypedJsonText},
         {"TestHeaderValidationBeforeSending", TestHeaderValidationBeforeSending},

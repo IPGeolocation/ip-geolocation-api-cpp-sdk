@@ -4,7 +4,7 @@
 
 - Add Arabic (`Language::kAr`) for single and bulk lookups.
 - Include CDN, proxy, bot and corporate gateway details in typed lookup results.
-- Hide API keys in request errors and individual bulk errors.
+- Hide API keys in request errors and typed bulk error messages.
 - Keep the HTTP status when an error response is too large or ends early.
 - Reject invalid HTTP headers, malformed JSON text and extra results in typed bulk lookups.
 - Fix very long timeouts on Windows and use HTTP/1.1 with libcurl versions affected by the HTTP/2 upload issue.

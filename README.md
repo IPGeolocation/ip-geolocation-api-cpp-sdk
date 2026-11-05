@@ -406,7 +406,7 @@ The SDK throws exceptions derived from `IpGeolocationError`:
 - `SerializationError`: invalid JSON in typed methods
 - `ApiError`: non-2xx API response, including HTTP status code and response body
 
-`ApiError` gives you the HTTP status, the error message and the response body. If an error includes your API key, the SDK hides it. This also applies to errors in individual bulk results. If the error body is too large or the connection ends before it arrives in full, you still get the HTTP status.
+`ApiError` gives you the HTTP status, the error message and the response body. If an error includes your API key, the SDK hides it. This also applies to errors in typed bulk results. Raw bulk lookups return the API response as received. If the error body is too large or the connection ends before it arrives in full, you still get the HTTP status.
 
 Example:
 
