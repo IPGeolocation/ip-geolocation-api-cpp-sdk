@@ -83,8 +83,8 @@ Public headers live under the `ipgeolocation` include directory:
 #include <ipgeolocation/ipgeolocation.hpp>
 ```
 
-CMake target: `ipgeolocation::ipgeolocation`
-GitHub repository: <https://github.com/IPGeolocation/ip-geolocation-api-cpp-sdk>
+- CMake target: `ipgeolocation::ipgeolocation`
+- GitHub repository: <https://github.com/IPGeolocation/ip-geolocation-api-cpp-sdk>
 
 ## Quick Start
 
